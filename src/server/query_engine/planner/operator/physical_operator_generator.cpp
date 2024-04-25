@@ -26,6 +26,9 @@
 #include "include/query_engine/planner/operator/group_by_physical_operator.h"
 #include "common/log/log.h"
 #include "include/storage_engine/recorder/table.h"
+#include "include/query_engine/structor/expression/comparison_expression.h"
+#include "include/query_engine/structor/expression/value_expression.h"
+#include "include/query_engine/planner/operator/index_scan_physical_operator.h"
 
 using namespace std;
 
@@ -95,23 +98,69 @@ RC PhysicalOperatorGenerator::create_plan(
     //   if(compare_expr->comp != EQUAL_TO) continue;
     //   [process]
     //  }
+  ValueExpr *value_expr = nullptr;
+  for (auto &predicate : predicates) {
+    if (predicate->type() == ExprType::COMPARISON) {
+      auto compare_expr = dynamic_cast<ComparisonExpr *>(predicate.get());
+      if (compare_expr->comp() != EQUAL_TO) {
+        continue;
+      }
+      // auto left_expr = compare_expr->_left_();
+      // auto right_expr = compare_expr->right();
+      if (compare_expr->_left_()->type() == ExprType::FIELD && compare_expr->right()->type() == ExprType::VALUE) {
+        auto field_expr = dynamic_cast<FieldExpr *>(compare_expr->left().get());
+        value_expr = dynamic_cast<ValueExpr *>(compare_expr->right().get());
+        index = table_get_oper.table()->find_index_by_field(field_expr->field_name());
+        LOG_DEBUG("find index by field ");
+        break;
+      } 
+      else if (compare_expr->_left_()->type() == ExprType::VALUE && compare_expr->right()->type() == ExprType::FIELD) {
+        auto field_expr = dynamic_cast<FieldExpr *>(compare_expr->right().get());
+        value_expr = dynamic_cast<ValueExpr *>(compare_expr->_left_().get());
+        index = table_get_oper.table()->find_index_by_field(field_expr->field_name());
+        break;
+      }
+      // } else if (compare_expr->_left_()->type() == ExprType::FIELD && compare_expr->right()->type() == ExprType::FIELD) {
+      //   auto left_field_expr = dynamic_cast<FieldExpr *>(compare_expr->_left_().get());
+      //   auto right_field_expr = dynamic_cast<FieldExpr *>(compare_expr->right().get());
+      //   index = table_get_oper.table()->find_index_by_field(left_field_expr->field_name());
+      //   if (index == nullptr) {
+      //     index = table_get_oper.table()->find_index_by_field(right_field_expr->field_name());
+      //   }
+      //   break;
+      // }
+
+
+    }
+  }
+  // 2. 通过table_get_oper获取table的元信息，包括索引信息
+
   // 2. 对应上面example里的process阶段， 找到等值表达式中对应的FieldExpression和ValueExpression(左值和右值)
   // 通过FieldExpression找到对应的Index, 通过ValueExpression找到对应的Value
 
   if(index == nullptr){
+    LOG_TRACE("use table scan");
     Table *table = table_get_oper.table();
     auto table_scan_oper = new TableScanPhysicalOperator(table, table_get_oper.table_alias(), table_get_oper.readonly());
     table_scan_oper->isdelete_ = is_delete;
     table_scan_oper->set_predicates(std::move(predicates));
     oper = unique_ptr<PhysicalOperator>(table_scan_oper);
-    LOG_TRACE("use table scan");
   }else{
+    LOG_TRACE("use index scan");
+
     // TODO [Lab2] 生成IndexScanOperator, 并放置在算子树上，下面是一个实现参考，具体实现可以根据需要进行修改
     // IndexScanner 在设计时，考虑了范围查找索引的情况，但此处我们只需要考虑单个键的情况
     // const Value &value = value_expression->get_value();
     // IndexScanPhysicalOperator *operator =
     //              new IndexScanPhysicalOperator(table, index, readonly, &value, true, &value, true);
     // oper = unique_ptr<PhysicalOperator>(operator);
+    const Value &value = value_expr->get_value();
+    IndexScanPhysicalOperator *index_scan_oper = 
+                    new IndexScanPhysicalOperator(table_get_oper.table(), index, table_get_oper.readonly(), &value, true, &value, true);
+    index_scan_oper->isdelete_ = is_delete;
+    index_scan_oper->set_predicates(std::move(predicates));
+    oper = unique_ptr<PhysicalOperator>(index_scan_oper);
+
   }
 
   return RC::SUCCESS;
