@@ -52,7 +52,11 @@ RC JoinPhysicalOperator::next()
   LOG_INFO("children_[1] type %d", children_[1]->type());
   if (left_tuple_ == nullptr)
   {
-    children_[0]->next();
+    RC rc =  children_[0]->next();
+    if (rc != RC::SUCCESS)
+    {
+      return rc;
+    }
     left_tuple_ = children_[0]->current_tuple();
     LOG_INFO("left_tuple_ to string %s", left_tuple_->to_string().c_str());
   }
