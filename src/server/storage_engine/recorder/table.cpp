@@ -348,6 +348,39 @@ RC Table::insert_record(Record &record)
   }
 
   // TODO [Lab2] 增加索引的处理逻辑
+  bool is_duplicate = false;
+  int index_count = 0;
+  for (Index *index : indexes_) {
+    rc = index->insert_entry(record.data(), &record.rid());
+    if (rc == RC::RECORD_DUPLICATE_KEY){
+      is_duplicate = true;
+      break;
+    }
+    else if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to insert record into index. table=%s, index=%s, rc=%d:%s",
+                name(), index->index_meta().name(), rc, strrc(rc));
+      return rc;
+    }
+    index_count++;
+  }
+  if (is_duplicate){
+    for (int i = 0; i < index_count; i++){
+      indexes_[i]->delete_entry(record.data(), &record.rid());
+    }
+    rc = record_handler_->delete_record(&record.rid());
+  }
+
+  // // 判断是否在唯一索引上插入了重复数据
+  // for (Index *index : indexes_) {
+  //   if (index->index_meta().is_unique()) {
+  //     rc = index->delete_entry(record.data(), &record.rid());
+  //     if (rc != RC::SUCCESS) {
+  //       LOG_ERROR("Failed to delete record from index. table=%s, index=%s, rc=%d:%s",
+  //                 name(), index->index_meta().name(), rc, strrc(rc));
+  //       return rc;
+  //     }
+  //   }
+  // }
 
   return rc;
 }
@@ -357,6 +390,18 @@ RC Table::delete_record(const Record &record)
   RC rc = RC::SUCCESS;
 
   // TODO [Lab2] 增加索引的处理逻辑
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Delete record failed. table name=%s, rc=%s", table_meta_.name(), strrc(rc));
+    return rc;
+  }
+  for (Index *index : indexes_) {
+    rc = index->delete_entry(record.data(), &record.rid());
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to delete record from index. table=%s, index=%s, rc=%d:%s",
+                name(), index->index_meta().name(), rc, strrc(rc));
+      return rc;
+    }
+  }
 
   rc = record_handler_->delete_record(&record.rid());
   return rc;

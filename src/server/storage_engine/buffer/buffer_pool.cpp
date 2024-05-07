@@ -218,6 +218,17 @@ RC FileBufferPool::flush_page_internal(Frame &frame)
 //  3. 写入数据到文件的目标位置
 //  4. 清除frame的脏标记
 //  5. 记录和返回成功
+  PageNum page_num = frame.page_num();
+  int64_t offset = ((int64_t)page_num) * BP_PAGE_SIZE;
+  if (lseek(file_desc_, offset, SEEK_SET) == -1) {
+    LOG_ERROR("Failed to flush page %s:%d, due to failed to lseek:%s.", file_name_.c_str(), page_num, strerror(errno));
+    return RC::IOERR_SEEK;
+  }
+  if (writen(file_desc_, (char *)&frame.page(), BP_PAGE_SIZE) != 0) {
+    LOG_ERROR("Failed to flush page %s:%d, due to failed to write data:%s.", file_name_.c_str(), page_num, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+  frame.clear_dirty();
   return RC::SUCCESS;
 }
 
@@ -226,6 +237,22 @@ RC FileBufferPool::flush_page_internal(Frame &frame)
  */
 RC FileBufferPool::evict_page(PageNum page_num, Frame *buf)
 {
+  // std::lock_guard<std::mutex> lock_guard(lock_);
+  std::scoped_lock lock_guard(lock_);
+
+  // RC rc = RC::SUCCESS;
+  RC rc = get_this_page(page_num, &buf);
+  if (page_num >= file_header_->page_count) {
+    LOG_ERROR("Failed to evict page %s:%d, due to page num is invalid.", file_name_.c_str(), page_num);
+    return RC::BUFFERPOOL_NOBUF;
+  }
+
+  rc = flush_page_internal(*buf);
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to evict page %s:%d, due to failed to flush page:%s.", file_name_.c_str(), page_num, strrc(rc));
+    return rc;
+  }
+
   return RC::SUCCESS;
 }
 /**
@@ -233,6 +260,29 @@ RC FileBufferPool::evict_page(PageNum page_num, Frame *buf)
  */
 RC FileBufferPool::evict_all_pages()
 {
+  // std::lock_guard<std::mutex> lock_guard(lock_);
+  std::scoped_lock lock_guard(lock_);
+
+  auto evict_action = [this](Frame *frame) {
+    if (!frame->dirty()) {
+      return RC::SUCCESS;
+    }
+    RC rc = RC::SUCCESS;
+    if (frame->file_desc() == file_desc_) {
+      rc = this->flush_page_internal(*frame);
+    } else {
+      rc = bp_manager_.flush_page(*frame);
+    }
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to evict all pages due to failed to flush old block. rc=%s", strrc(rc));
+    }
+    return rc;
+  };
+  auto list = frame_manager_.find_list(file_desc_);
+  for (auto frame : list) {
+    (void)evict_action(frame);
+  }
+  
   return RC::SUCCESS;
 }
 
@@ -486,7 +536,15 @@ RC BufferPoolManager::close_file(const char *_file_name)
  */
 RC BufferPoolManager::flush_page(Frame &frame)
 {
-  return RC::SUCCESS;
+  std::scoped_lock lock_guard(lock_);
+  auto iter = fd_buffer_pools_.find(frame.file_desc());
+  if (iter == fd_buffer_pools_.end()) {
+    LOG_ERROR("Failed to flush page, due to no buffer pool found. file desc=%d", frame.file_desc());
+    return RC::BUFFERPOOL_NOBUF;
+  }
+  FileBufferPool *bp = iter->second;
+  return bp->flush_page(frame);
+  // return RC::SUCCESS;
 }
 
 static BufferPoolManager *default_bpm = nullptr;

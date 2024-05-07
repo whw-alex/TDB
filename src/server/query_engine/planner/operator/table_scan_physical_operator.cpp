@@ -15,6 +15,7 @@ RC TableScanPhysicalOperator::open(Trx *trx)
 
 RC TableScanPhysicalOperator::next()
 {
+  LOG_INFO("TableScanPhysicalOperator next called");
   if (!record_scanner_.has_next()) {
     return RC::RECORD_EOF;
   }
@@ -39,6 +40,7 @@ RC TableScanPhysicalOperator::next()
       rc = RC::RECORD_EOF;
     }
   }
+  LOG_INFO("TableScanPhysicalOperator next called filter_result %d", filter_result);
   return rc;
 }
 

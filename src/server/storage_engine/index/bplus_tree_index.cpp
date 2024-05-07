@@ -91,6 +91,31 @@ RC BplusTreeIndex::close()
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
   // TODO [Lab2] 增加索引项的处理逻辑
+  // 1. 从record中取出multi_field_metas_中的字段值，作为key
+  // 2. 调用BplusTreeHandler的insert_entry完成插入操作
+  // 3. 如果是唯一索引（unique），需要判断是否存在重复的字段值，如果有，返回RECORD_DUPLICATE_KEY，插入失败
+  std::vector<const char*> multi_keys;
+  for (int i = 0; i < multi_field_metas_.size(); i++) {
+    const char *key = record + multi_field_metas_[i].offset();
+    multi_keys.push_back(key);
+  }
+
+  // 判断是否是唯一索引
+  if (index_meta_.is_unique()) {
+    std::list<RID> rids;
+    int multi_keys_amount = multi_field_metas_.size();
+    RC rc = index_handler_.get_entry(multi_keys.data(), rids, multi_keys_amount);
+    if (rids.size() > 0){
+      LOG_WARN("duplicate key. rc=%d:%s", rc, strrc(rc));
+      return RC::RECORD_DUPLICATE_KEY;
+    }
+  }
+  RC rc = index_handler_.insert_entry(multi_keys.data(), rid);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to insert entry. rc=%d:%s", rc, strrc(rc));
+    return rc;
+  }
+
   return RC::SUCCESS;
 }
 
@@ -101,6 +126,20 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 RC BplusTreeIndex::delete_entry(const char *record, const RID *rid)
 {
   // TODO [Lab2] 增加索引项的处理逻辑
+  // 1. 从record中取出multi_field_metas_中的字段值，作为key
+  // 2. 调用BplusTreeHandler的delete_entry完成插入操作
+  // const char** multi_keys = new char*[multi_field_metas_.size()];
+  std::vector<const char*> multi_keys;
+  for (int i = 0; i < multi_field_metas_.size(); i++) {
+    const char *key = record + multi_field_metas_[i].offset();
+    multi_keys.push_back(key);
+  }
+  RC rc = index_handler_.delete_entry(multi_keys.data(), rid);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to delete entry. rc=%d:%s", rc, strrc(rc));
+    return rc;
+  }
+
   return RC::SUCCESS;
 }
 

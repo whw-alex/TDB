@@ -39,6 +39,7 @@ RC LogicalPlanGenerator::create(Stmt *stmt, unique_ptr<LogicalNode> &logical_nod
 
     case StmtType::SELECT: {
       SelectStmt *select_stmt = static_cast<SelectStmt *>(stmt);
+      LOG_INFO("create select logical node");
       rc = plan_node(select_stmt, logical_node);
     } break;
 
@@ -98,21 +99,40 @@ RC LogicalPlanGenerator::plan_node(
   RC rc;
 
   std::unique_ptr<LogicalNode> root;
+  LOG_INFO("plan_node: select_stmt->table_alias().size()=%d", select_stmt->table_alias().size());
 
   // 1. Table scan node
   //TODO [Lab3] 当前只取一个表作为查询表,当引入Join后需要考虑同时查询多个表的情况
   //参考思路: 遍历tables中的所有Table，针对每个table生成TableGetLogicalNode
-   Table *default_table = tables[0];
-   const char *table_name = default_table->name();
-   std::vector<Field> fields;
-   for (auto *field : all_fields) {
-     if (0 == strcmp(field->table_name(), default_table->name())) {
-       fields.push_back(*field);
-     }
-   }
-
-   root = std::unique_ptr<LogicalNode>(
-       new TableGetLogicalNode(default_table, select_stmt->table_alias()[0], fields, true/*readonly*/));
+  int table_index = 0;
+  std::vector<std::unique_ptr<LogicalNode>> table_get_nodes;
+  for (auto *table : tables) {
+    std::vector<Field> fields;
+    for (auto *field : all_fields) {
+      if (0 == strcmp(field->table_name(), table->name())) {
+        fields.push_back(*field);
+      }
+    }
+    std::unique_ptr<LogicalNode> table_get_node(
+        new TableGetLogicalNode(table, select_stmt->table_alias()[table_index], fields, true/*readonly*/));
+    table_get_nodes.push_back(std::move(table_get_node));
+    table_index++;
+    LOG_INFO("table_name=%s", table->name());
+  }
+  LOG_INFO("table_index=%d", table_index);
+  
+  // 要改的地方
+  //  Table *default_table = tables[0];
+  //  const char *table_name = default_table->name();
+  //  std::vector<Field> fields;
+  //  for (auto *field : all_fields) {
+  //    if (0 == strcmp(field->table_name(), default_table->name())) {
+  //      fields.push_back(*field);
+  //    }
+  //  }
+  // 要改的地方
+  //  root = std::unique_ptr<LogicalNode>(
+  //      new TableGetLogicalNode(default_table, select_stmt->table_alias()[0], fields, true/*readonly*/));
 
   // 2. inner join node
   // TODO [Lab3] 完善Join节点的逻辑计划生成, 需要解析并设置Join涉及的表,以及Join使用到的连接条件
@@ -122,7 +142,45 @@ RC LogicalPlanGenerator::plan_node(
   // * 遍历TableGetLogicalNode
   // * 生成JoinLogicalNode, 通过select_stmt中的join_filter_stmts
   // ps: 需要考虑table数大于2的情况
+  // 如果多个表，通过嵌套方式实现Join，使用递归
 
+  // 要改的地方
+  if (table_get_nodes.size() > 1) {
+    LOG_INFO("table_get_nodes.size()=%d", table_get_nodes.size());
+    // std::unique_ptr<LogicalNode> join_node(new JoinLogicalNode);
+    // join_node->add_child(std::move(table_get_nodes[0]));
+    std::unique_ptr<LogicalNode> default_table_get_node = std::move(table_get_nodes[0]);
+    for (int i = 1; i < table_get_nodes.size(); i++) {
+      std::unique_ptr<LogicalNode> join_node(new JoinLogicalNode);
+      join_node->add_child(std::move(default_table_get_node));
+      LOG_INFO("i=%d", i);
+      join_node->add_child(std::move(table_get_nodes[i]));
+      auto *join_filter = select_stmt->join_filter_stmts()[i - 1];
+      unique_ptr<ConjunctionExpr> join_expr = _transfer_filter_stmt_to_expr(join_filter);
+      if (join_expr != nullptr) {
+        static_cast<JoinLogicalNode *>(join_node.get())->set_condition(std::move(join_expr));
+      }
+      // std::unique_ptr<LogicalNode> tmp_join_node(new JoinLogicalNode);
+      // tmp_join_node->add_child(std::move(join_node));
+      // join_node = std::move(tmp_join_node);
+      default_table_get_node = std::move(join_node);
+      join_node.reset();
+
+    }
+    // LOG_INFO("default_table_get_node: %s", default_table_get_node); 
+    root = std::move(default_table_get_node);
+    // 判断root是否为空
+    if (root == nullptr) {
+      LOG_INFO("root is null");
+    }
+    else {
+      LOG_INFO("root is not null");
+    }
+  } else {
+    root = std::move(table_get_nodes[0]);
+  }
+
+  LOG_INFO("step 2 finish");
 
   // 3. Table filter node
   auto *table_filter_stmt = select_stmt->filter_stmt();
